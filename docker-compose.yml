@@ -1,0 +1,13 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: regula
+      POSTGRES_PASSWORD: regula
+      POSTGRES_DB: regula
+    ports:
+      - "5432:5432"
+    volumes:
+      - regula_pgdata:/var/lib/postgresql/data
+volumes:
+  regula_pgdata:
