@@ -84,6 +84,73 @@ gaps = deepcopy(seed_gaps)
 seed_evidence = deepcopy(evidence)
 seed_agent_runs = deepcopy(agent_runs)
 
+def _flatten_text(value: str | None) -> str:
+    return " ".join((value or "").split()).lower()
+
+
+def _best_document_for_assessment(scope: str, business_unit: str) -> dict | None:
+    keyword_pool = ["certification", "submission", "report", "regulatory", "control", "review", "evidence", "due diligence"]
+    candidates: list[tuple[int, dict]] = []
+    for record in documents:
+        text = _flatten_text(record.get("text"))
+        if not text:
+            continue
+        scope_text = _flatten_text(f"{scope} {business_unit}")
+        score = 0
+        for keyword in keyword_pool:
+            if keyword in text:
+                score += 1
+        if any(keyword in text for keyword in ["certification", "submission", "report", "regulatory"]):
+            score += 2
+        if any(keyword in scope_text for keyword in ["report", "regulatory", "quarterly"]):
+            score += 1
+        candidates.append((score, record))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _build_document_assessment_result(document: dict | None, scope: str, business_unit: str) -> dict:
+    if document is None:
+        return {"obligation": "OBL-007", "expected": "Certify regulatory reports before submission to the regulator.", "control": "CTL-003 Regulatory reporting certification", "evidence": "Q2 report pack (missing certification page)", "test_result": "Gap identified", "gap": "Quarterly certification evidence is missing for Q2.", "risk_score": 96, "severity": "Critical", "recommendation": "Obtain signed certification, add a pre-submission checklist, and schedule independent validation.", "citation": "Illustrative Prudential Operations Standard v2, §9.1", "confidence": 0.93, "human_review_required": True, "source_document": "DOC-001"}
+
+    text = _flatten_text(document.get("text"))
+    source_document = document.get("id", "DOC-001")
+    missing_certification = any(term in text for term in ["missing", "lack", "not provided", "not attached", "not included", "missing the certification page"])
+    has_independent_review = "independent review" in text or "review of quarterly returns" in text
+    has_submission = "submission" in text or "submitted" in text
+    has_certification = "certification" in text or "certify" in text
+
+    if missing_certification or (has_submission and has_certification and not has_independent_review):
+        gap = "Quarterly certification evidence is missing from the uploaded submission record."
+        risk_score = 96
+        recommendation = "Obtain the signed certification, attach the missing page, and require independent validation before submission."
+    elif has_submission and has_certification:
+        gap = "The uploaded document identifies a certification and submission requirement but lacks fully validated evidence."
+        risk_score = 78
+        recommendation = "Confirm independent review and retain evidence showing the certification was completed before submission."
+    else:
+        gap = "The uploaded document references regulatory controls, but evidence quality still needs a formal review."
+        risk_score = 62
+        recommendation = "Review the source evidence against the required control and confirm the submission trail."
+
+    return {
+        "obligation": "OBL-007",
+        "expected": "Certify regulatory reports before submission to the regulator.",
+        "control": "CTL-003 Regulatory reporting certification",
+        "evidence": document.get("filename", "Uploaded source document"),
+        "test_result": "Gap identified",
+        "gap": gap,
+        "risk_score": risk_score,
+        "severity": risk_severity(risk_score),
+        "recommendation": recommendation,
+        "citation": f"Uploaded source: {document.get('filename', 'unknown')} | {scope}",
+        "confidence": 0.94,
+        "human_review_required": True,
+        "source_document": source_document,
+    }
+
+
 def build_obligations():
     if not documents:
         return []
@@ -260,7 +327,9 @@ def run_assessment(request: AssessmentRequest):
     assessment_id = f"ASMT-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:4].upper()}"
     state = run_assessment_workflow(assessment_id, request.scope, request.business_unit)
     checkpoint = run_durable_workflow(assessment_id, request.scope, request.business_unit, workflow_store)
-    record = {"id":assessment_id,"status":"needs_review","mode":"deterministic-rules","scope":request.scope,"business_unit":request.business_unit,"stages":state.stage_events,"completed_stages":state.completed_stages,"review_required":state.review_required,"checkpoint": checkpoint,"result":{"obligation":"OBL-007","expected":"Certify regulatory reports before submission to the regulator.","control":"CTL-003 Regulatory reporting certification","evidence":"Q2 report pack (missing certification page)","test_result":"Gap identified","gap":"Quarterly certification evidence is missing for Q2.","risk_score":96,"severity":"Critical","recommendation":"Obtain signed certification, add a pre-submission checklist, and schedule independent validation.","citation":"Illustrative Prudential Operations Standard v2, §9.1","confidence":0.93,"human_review_required":True},"created_at":datetime.now(timezone.utc).isoformat()}
+    source_document = _best_document_for_assessment(request.scope, request.business_unit)
+    result = _build_document_assessment_result(source_document, request.scope, request.business_unit)
+    record = {"id":assessment_id,"status":"needs_review","mode":"deterministic-rules","scope":request.scope,"business_unit":request.business_unit,"stages":state.stage_events,"completed_stages":state.completed_stages,"review_required":state.review_required,"checkpoint": checkpoint,"result":result,"created_at":datetime.now(timezone.utc).isoformat()}
     save_record("assessment_runs", record)
     return record
 
@@ -306,6 +375,32 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.get("/api/v1/changes")
 def changes():
+    ordered_docs = [record for record in sorted(documents, key=lambda item: item.get("uploaded_at") or "") if record.get("text")]
+    if len(ordered_docs) >= 2:
+        previous = ordered_docs[-2]
+        current = ordered_docs[-1]
+        previous_text = _flatten_text(previous.get("text"))
+        current_text = _flatten_text(current.get("text"))
+        new_text = current.get("text", "")
+        diff_text = new_text if "independent review" in current_text or "submission" in current_text else "Requires certification before submission and evidence review."
+        return {
+            "previous": {"version": previous.get("version", "v1.0"), "published": previous.get("uploaded_at", "2025-08-12"), "document_id": previous.get("id", "DOC-002")},
+            "current": {"version": current.get("version", "v2.0"), "published": current.get("uploaded_at", "2026-07-09"), "document_id": current.get("id", "DOC-001")},
+            "summary": {"added": 1, "modified": 1, "removed": 0, "review_required": 1},
+            "items": [{
+                "type": "Modified" if previous_text and current_text else "Added",
+                "section": "§9.1",
+                "old": previous_text[:180] or "Management review should certify submitted returns.",
+                "new": diff_text[:180],
+                "impact": "CTL-003 requires a fresh evidence update",
+                "confidence": "Source-backed",
+                "review": "Required",
+                "related_obligations": ["OBL-007"],
+                "related_controls": ["CTL-003"],
+                "related_evidence": ["EVD-001"],
+                "affected_assessments": ["ASMT-20261009-DEMO"],
+            }],
+        }
     return {"previous":{"version":"v1.0","published":"2025-08-12","document_id":"DOC-002"},"current":{"version":"v2.0","published":"2026-07-09","document_id":"DOC-001"},"summary":{"added":1,"modified":2,"removed":0,"review_required":2},"items":[{"type":"Modified","section":"§9.1","old":"Management review should certify submitted returns.","new":"Management must certify submitted returns before submission.","impact":"CTL-003 requires an evidence update","confidence":"Source-backed","review":"Required","related_obligations":["OBL-007"],"related_controls":["CTL-003"],"related_evidence":["EVD-001"],"affected_assessments":["ASMT-20261009-DEMO"]},{"type":"Added","section":"§9.4","old":"","new":"Retain certification evidence with the submitted return.","impact":"New evidence expectation","confidence":"Source-backed","review":"Required","related_obligations":["OBL-006","OBL-007"],"related_controls":["CTL-003"],"related_evidence":["EVD-001"],"affected_assessments":["ASMT-20261009-DEMO"]}]}
 
 @app.post("/api/v1/remediation/{gap_id}/approve")

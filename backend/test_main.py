@@ -98,6 +98,23 @@ def test_remediation_requires_demo_manager_role():
     assert response.status_code == 403
 
 
+def test_assessment_uses_uploaded_document_content_when_available():
+    upload = client.post('/api/v1/documents/upload', files={'file': ('quarterly-certification.txt', b'Quarterly regulatory submission is missing the certification page and signature evidence.', 'text/plain')})
+    assert upload.status_code == 200
+    document_id = upload.json()['id']
+    assessment = client.post('/api/v1/assessments', json={'scope':'Quarterly regulatory reporting','business_unit':'Retail Banking'}).json()
+    assert 'missing' in assessment['result']['gap'].lower()
+    assert assessment['result']['source_document'] == document_id
+
+
+def test_change_analysis_uses_stored_document_text_not_seed_data():
+    upload = client.post('/api/v1/documents/upload', files={'file': ('report-v3.txt', b'New regulatory rule requires certification before submission and independent review of quarterly returns.', 'text/plain')})
+    assert upload.status_code == 200
+    payload = client.get('/api/v1/changes').json()
+    matched = any('independent review' in item['new'].lower() for item in payload['items'])
+    assert matched is True
+
+
 def test_durable_workflow_checkpoint_is_persisted_and_recoverable():
     response = client.post('/api/v1/assessments', json={'scope':'Quarterly certification evidence', 'business_unit':'Retail Banking'})
     assessment = response.json()
