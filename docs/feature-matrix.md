@@ -18,3 +18,15 @@
 | Contradiction detection | Not implemented | Explicitly out of MVP scope |
 
 This matrix is intentionally conservative. A navigation item or seeded record is not counted as a complete feature unless the underlying behavior is implemented and testable.
+
+## Architecture Capabilities
+
+| Capability | Status | Evidence |
+| --- | --- | --- |
+| SQLAlchemy normalized schema | Implemented and tested | `backend/models.py`, `test_orm.py` |
+| Alembic initialization | Implemented and verified | `backend/migrations/versions/0001_traceability_schema.py`, `alembic upgrade head` |
+| Lexical retrieval fallback | Implemented and tested | `GET /api/v1/search`, `test_retrieval.py` |
+| Typed assessment workflow | Implemented and tested | `backend/workflow.py`, `test_workflow.py` |
+| Demo-role authorization | Implemented and tested | `X-Demo-Role`, remediation approval test |
+| Durable LangGraph checkpoints | Not implemented | Current workflow is an in-process typed fallback |
+| pgvector embeddings | Not implemented | API reports `embedding_available: false` |

@@ -70,6 +70,11 @@ The core experience runs without a paid API, database service, or cloud deployme
 - Agent activity, audit trail, and configuration views
 - SQLite persistence for documents and audit events
 - Optional server-side Groq assistant endpoint
+- SQLAlchemy traceability models and Alembic schema initialization
+- Bounded lexical retrieval with citation-aware chunk results
+- Typed assessment stage state with explicit review pauses
+- Persisted assessment runs with stage-history list/detail APIs
+- Backend demo-role authorization for remediation approval
 - Demo reset and complete data-clear operations
 
 ## Architecture
@@ -99,6 +104,7 @@ cd "D:\ExA Hackathon\backend"
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python -m alembic upgrade head
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -166,10 +172,14 @@ The current verified baseline is 15 backend tests passing and a successful Vite 
 | Deterministic risk prioritization | Implemented and tested |
 | Human-approved remediation | Implemented and audited |
 | Regulatory change impact | Implemented as a traceable illustrative comparison |
-| PostgreSQL/Alembic | Not yet complete |
-| LangGraph durable orchestration | Not yet complete |
+| SQLAlchemy/Alembic schema foundation | Implemented and tested |
+| Lexical retrieval fallback | Implemented and tested |
+| Typed assessment stage workflow | Implemented and tested |
+| Persisted assessment stage history | Implemented and tested |
+| PostgreSQL production adapter | Partial: schema is PostgreSQL-compatible, API runtime remains SQLite-first |
+| LangGraph durable orchestration | Not yet complete: typed in-process fallback is used |
 | Embedding retrieval/pgvector | Not yet complete |
-| Authentication and authorization | Not yet complete |
+| Demo-role authorization | Implemented for remediation approval; full authentication is not complete |
 
 This is a hackathon prototype, not legal advice, certified regulatory software, or a guarantee of compliance. Synthetic bank records and illustrative regulatory excerpts are labelled as such.
 

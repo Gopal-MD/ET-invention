@@ -6,12 +6,16 @@ from typing import Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from database import connect, initialize, save_record, seed_records
+from database import connect, initialize, list_records, save_record, seed_records
 from document_parser import DocumentParseError, parse_document
+from orchestration import WorkflowCheckpointStore, run_durable_workflow
+from retrieval import lexical_search
+from vector_adapter import VectorAdapter
+from workflow import run_assessment_workflow
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 initialize()
@@ -21,6 +25,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allo
 
 NOW = datetime.now(timezone.utc).isoformat()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+workflow_store = WorkflowCheckpointStore(Path(__file__).resolve().parent / ".checkpoints")
+vector_adapter = VectorAdapter()
+
 seed_documents = [
     {"id": "DOC-001", "filename": "prudential-operations-standard-v2.txt", "type": "TXT", "jurisdiction": "India", "version": "v2.0", "status": "processed", "source_verified": False, "linked_obligations": 10, "uploaded_at": NOW},
     {"id": "DOC-002", "filename": "prudential-operations-standard-v1.txt", "type": "TXT", "jurisdiction": "India", "version": "v1.0", "status": "processed", "source_verified": False, "linked_obligations": 8, "uploaded_at": NOW},
@@ -90,7 +97,7 @@ def health():
 
 @app.get("/api/v1/configuration")
 def configuration():
-    return {"provider":"Groq","model":GROQ_MODEL,"configured":bool(os.getenv("GROQ_API_KEY")),"base_url":os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),"demo_mode":not bool(os.getenv("GROQ_API_KEY")),"warning":"Live model calls are optional; deterministic rules remain enabled."}
+    return {"provider":"Groq","model":GROQ_MODEL,"configured":bool(os.getenv("GROQ_API_KEY")),"base_url":os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),"demo_mode":not bool(os.getenv("GROQ_API_KEY")),"embedding_available": vector_adapter.is_available(),"warning":"Live model calls are optional; deterministic rules remain enabled."}
 
 @app.post("/api/v1/assistant")
 async def assistant(request: AssistantRequest):
@@ -134,6 +141,14 @@ def obligations(search: str = "", review: str = ""):
     return {"items": rows, "total": len(rows)}
 @app.get("/api/v1/controls")
 def get_controls(): return controls
+
+@app.get("/api/v1/obligations/{obligation_id}")
+def get_obligation(obligation_id: str):
+    item = next((row for row in build_obligations() if row["id"] == obligation_id), None)
+    if item is None:
+        return {"status": "not_found", "message": "Obligation does not exist"}
+    return item
+
 @app.get("/api/v1/gaps")
 def get_gaps(status: str = "", severity: str = ""):
     rows = gaps
@@ -142,6 +157,13 @@ def get_gaps(status: str = "", severity: str = ""):
     if severity:
         rows = [row for row in rows if row["severity"].lower() == severity.lower()]
     return {"items": rows, "total": len(rows)}
+
+@app.get("/api/v1/gaps/{gap_id}")
+def get_gap(gap_id: str):
+    item = next((row for row in gaps if row["id"] == gap_id), None)
+    if item is None:
+        return {"status": "not_found", "message": "Gap does not exist"}
+    return item
 
 @app.patch("/api/v1/gaps/{gap_id}/status")
 def transition_gap(gap_id: str, transition: GapTransition):
@@ -170,6 +192,7 @@ def reset_demo_data():
     with connect() as connection:
         connection.execute("DELETE FROM documents")
         connection.execute("DELETE FROM audit_events")
+        connection.execute("DELETE FROM assessment_runs")
         connection.commit()
     documents = seed_records("documents", seed_documents)
     audit_events = seed_records("audit_events", seed_audit_events)
@@ -185,6 +208,7 @@ def clear_demo_data():
     with connect() as connection:
         connection.execute("DELETE FROM documents")
         connection.execute("DELETE FROM audit_events")
+        connection.execute("DELETE FROM assessment_runs")
         connection.commit()
     documents = []
     audit_events = []
@@ -205,6 +229,20 @@ def get_document(document_id: str):
         return {"status": "not_found", "message": "Document does not exist"}
     return {"document": document, "text": document.get("text", ""), "chunks": document.get("chunks", [])}
 
+@app.get("/api/v1/search")
+def search_sources(q: str, limit: int = 5):
+    chunks = [chunk for document in documents for chunk in document.get("chunks", [])]
+    lexical_results = lexical_search(chunks, q, limit)
+    vector_results = vector_adapter.search(q, limit=limit, chunks=chunks)
+    mode = "hybrid" if vector_results and lexical_results else ("vector" if vector_results else "lexical")
+    items = [result.__dict__ for result in lexical_results]
+    if not items and vector_results:
+        items = [
+            {"id": item["id"], "text": item["text"], "score": item["score"], "source": item["source"]}
+            for item in vector_results
+        ]
+    return {"query": q, "mode": mode, "items": items, "total": len(items), "embedding_available": vector_adapter.is_available()}
+
 @app.get("/api/v1/evidence")
 def get_evidence():
     return {"items": evidence, "total": len(evidence), "coverage": 74}
@@ -219,8 +257,32 @@ def get_audit_events():
 
 @app.post("/api/v1/assessments")
 def run_assessment(request: AssessmentRequest):
-    score = 96
-    return {"id":f"ASMT-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:4].upper()}","status":"completed","mode":"deterministic-rules","scope":request.scope,"stages":["Input validation","Regulatory retrieval","Applicability analysis","Control mapping","Evidence review","Deterministic compliance checks","Gap identification","Risk scoring","Remediation recommendation","Audit record creation"],"result":{"obligation":"OBL-007","expected":"Certify regulatory reports before submission to the regulator.","control":"CTL-003 Regulatory reporting certification","evidence":"Q2 report pack (missing certification page)","test_result":"Gap identified","gap":"Quarterly certification evidence is missing for Q2.","risk_score":score,"severity":risk_severity(score),"recommendation":"Obtain signed certification, add a pre-submission checklist, and schedule independent validation.","citation":"Illustrative Prudential Operations Standard v2, §9.1","confidence":0.93,"human_review_required":True}}
+    assessment_id = f"ASMT-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:4].upper()}"
+    state = run_assessment_workflow(assessment_id, request.scope, request.business_unit)
+    checkpoint = run_durable_workflow(assessment_id, request.scope, request.business_unit, workflow_store)
+    record = {"id":assessment_id,"status":"needs_review","mode":"deterministic-rules","scope":request.scope,"business_unit":request.business_unit,"stages":state.stage_events,"completed_stages":state.completed_stages,"review_required":state.review_required,"checkpoint": checkpoint,"result":{"obligation":"OBL-007","expected":"Certify regulatory reports before submission to the regulator.","control":"CTL-003 Regulatory reporting certification","evidence":"Q2 report pack (missing certification page)","test_result":"Gap identified","gap":"Quarterly certification evidence is missing for Q2.","risk_score":96,"severity":"Critical","recommendation":"Obtain signed certification, add a pre-submission checklist, and schedule independent validation.","citation":"Illustrative Prudential Operations Standard v2, §9.1","confidence":0.93,"human_review_required":True},"created_at":datetime.now(timezone.utc).isoformat()}
+    save_record("assessment_runs", record)
+    return record
+
+@app.get("/api/v1/assessments")
+def get_assessments():
+    records = list_records("assessment_runs")
+    return {"items": records, "total": len(records)}
+
+@app.get("/api/v1/assessments/{assessment_id}")
+def get_assessment(assessment_id: str):
+    record = next((item for item in list_records("assessment_runs") if item["id"] == assessment_id), None)
+    if record is None:
+        return {"status": "not_found", "message": "Assessment does not exist"}
+    return record
+
+@app.get("/api/v1/assessments/{assessment_id}/checkpoint")
+def get_assessment_checkpoint(assessment_id: str):
+    record = next((item for item in list_records("assessment_runs") if item["id"] == assessment_id), None)
+    if record is not None and "checkpoint" in record:
+        return record["checkpoint"]
+    checkpoint = workflow_store.load(assessment_id)
+    return checkpoint if checkpoint.get("assessment_id") == assessment_id else {"assessment_id": assessment_id, "status": "ready", "state": {"review_required": True}}
 
 @app.post("/api/v1/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -247,7 +309,9 @@ def changes():
     return {"previous":{"version":"v1.0","published":"2025-08-12","document_id":"DOC-002"},"current":{"version":"v2.0","published":"2026-07-09","document_id":"DOC-001"},"summary":{"added":1,"modified":2,"removed":0,"review_required":2},"items":[{"type":"Modified","section":"§9.1","old":"Management review should certify submitted returns.","new":"Management must certify submitted returns before submission.","impact":"CTL-003 requires an evidence update","confidence":"Source-backed","review":"Required","related_obligations":["OBL-007"],"related_controls":["CTL-003"],"related_evidence":["EVD-001"],"affected_assessments":["ASMT-20261009-DEMO"]},{"type":"Added","section":"§9.4","old":"","new":"Retain certification evidence with the submitted return.","impact":"New evidence expectation","confidence":"Source-backed","review":"Required","related_obligations":["OBL-006","OBL-007"],"related_controls":["CTL-003"],"related_evidence":["EVD-001"],"affected_assessments":["ASMT-20261009-DEMO"]}]}
 
 @app.post("/api/v1/remediation/{gap_id}/approve")
-def approve_remediation(gap_id: str):
+def approve_remediation(gap_id: str, x_demo_role: str = Header(default="compliance.manager")):
+    if x_demo_role not in {"compliance.manager", "admin"}:
+        raise HTTPException(status_code=403, detail="A compliance manager role is required for remediation approval")
     if not any(g["id"] == gap_id for g in gaps):
         return {"gap_id": gap_id, "status": "not_found", "message": "Gap does not exist"}
     event_id = "AUD-"+str(uuid4())[:8].upper()

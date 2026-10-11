@@ -27,12 +27,17 @@ def initialize() -> None:
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS assessment_runs (
+                id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
 
 
 def list_records(table: str) -> list[dict[str, Any]]:
-    if table not in {"documents", "audit_events"}:
+    if table not in {"documents", "audit_events", "assessment_runs"}:
         raise ValueError("Unsupported table")
     initialize()
     with connect() as connection:
@@ -41,7 +46,7 @@ def list_records(table: str) -> list[dict[str, Any]]:
 
 
 def save_record(table: str, record: dict[str, Any]) -> None:
-    if table not in {"documents", "audit_events"}:
+    if table not in {"documents", "audit_events", "assessment_runs"}:
         raise ValueError("Unsupported table")
     initialize()
     with connect() as connection:

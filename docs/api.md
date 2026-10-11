@@ -9,12 +9,15 @@ Base URL: `http://127.0.0.1:8000/api/v1`
 | GET | `/dashboard` | Dashboard metrics and recent activity |
 | GET | `/documents` | Regulatory/source document records |
 | GET | `/documents/{document_id}` | Extracted text and provenance chunks for one document |
+| GET | `/search?q=...&limit=5` | Bounded lexical retrieval with chunk provenance |
 | POST | `/documents/upload` | Validate and ingest a supported upload |
 | GET | `/obligations` | Searchable obligation records |
 | GET | `/controls` | Control framework records |
 | GET | `/evidence` | Evidence quality records |
 | GET | `/gaps` | Filterable gap records |
 | POST | `/assessments` | Run the deterministic assessment workflow |
+| GET | `/assessments` | List persisted assessment runs |
+| GET | `/assessments/{assessment_id}` | Inspect stages, outputs, and review state |
 | GET | `/changes` | Version comparison demo |
 | POST | `/assistant` | Optional server-side Groq analysis or explicit demo fallback |
 | GET | `/agent-runs` | Agent/workflow observability records |
@@ -32,3 +35,5 @@ POST /assessments
 ```
 
 Every AI-assisted or deterministic result must remain reviewable. Provider errors are returned as errors; they are not silently converted into live success.
+
+Remediation approval accepts the optional `X-Demo-Role` header. `compliance.manager` and `admin` may approve; `viewer` receives HTTP 403.

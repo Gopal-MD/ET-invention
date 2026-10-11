@@ -20,6 +20,9 @@ def test_assessment_is_traceable():
     assert result['citation']
     assert result['evidence']
     assert result['human_review_required'] is True
+    assessment_id = response.json()['id']
+    assert client.get(f'/api/v1/assessments/{assessment_id}').json()['id'] == assessment_id
+    assert client.get('/api/v1/assessments').json()['total'] >= 1
 
 def test_configuration_exposes_safe_model_status():
     response = client.get('/api/v1/configuration')
@@ -89,3 +92,34 @@ def test_clear_and_restore_demo_data():
     assert restored.json()['status'] == 'reset'
     assert restored.json()['documents'] == 3
     assert len(client.get('/api/v1/controls').json()) == 4
+
+def test_remediation_requires_demo_manager_role():
+    response = client.post('/api/v1/remediation/GAP-1042/approve', headers={'X-Demo-Role': 'viewer'})
+    assert response.status_code == 403
+
+
+def test_durable_workflow_checkpoint_is_persisted_and_recoverable():
+    response = client.post('/api/v1/assessments', json={'scope':'Quarterly certification evidence', 'business_unit':'Retail Banking'})
+    assessment = response.json()
+    checkpoint = client.get(f"/api/v1/assessments/{assessment['id']}/checkpoint").json()
+    assert checkpoint['status'] in {'completed', 'ready'}
+    assert checkpoint['assessment_id'] == assessment['id']
+    assert checkpoint['state']['review_required'] is True
+
+
+def test_vector_search_contract_reports_optional_capability():
+    response = client.get('/api/v1/search', params={'q': 'certification', 'limit': 3})
+    assert response.status_code == 200
+    payload = response.json()
+    assert 'embedding_available' in payload
+    assert payload['mode'] in {'lexical', 'vector', 'hybrid'}
+
+
+def test_detail_routes_expose_object_level_metadata():
+    gap = client.get('/api/v1/gaps/GAP-1042').json()
+    assert gap['id'] == 'GAP-1042'
+    assert gap['severity'] == 'Critical'
+
+    obligation = client.get('/api/v1/obligations/OBL-007').json()
+    assert obligation['id'] == 'OBL-007'
+    assert 'certify' in obligation['statement'].lower()

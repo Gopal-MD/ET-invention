@@ -6,6 +6,7 @@ node_modules/
 dist/
 *.pyc
 backend/regulaai.db
+backend/.checkpoints/
 *.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts

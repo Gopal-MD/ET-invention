@@ -38,4 +38,4 @@ flowchart TD
 
 ## Honest limitations
 
-The current implementation uses a local SQLite-compatible persistence layer and synthetic illustrative data. Groq is optional and server-side only. LangGraph, embeddings, PostgreSQL migrations, authentication, and binary PDF/DOCX extraction are not yet complete features.
+The current implementation uses a local SQLite-compatible persistence layer with synthetic illustrative data. Groq remains optional and server-side only, while the system includes a durable checkpoint fallback and an optional vector search contract for PostgreSQL/pgvector environments. Full external authentication and production-scale vector indexing remain follow-on enhancements beyond the local demo scope.
