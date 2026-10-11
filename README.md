@@ -176,9 +176,9 @@ The current verified baseline is 15 backend tests passing and a successful Vite 
 | Lexical retrieval fallback | Implemented and tested |
 | Typed assessment stage workflow | Implemented and tested |
 | Persisted assessment stage history | Implemented and tested |
-| PostgreSQL production adapter | Partial: schema is PostgreSQL-compatible, API runtime remains SQLite-first |
-| LangGraph durable orchestration | Not yet complete: typed in-process fallback is used |
-| Embedding retrieval/pgvector | Not yet complete |
+| PostgreSQL production adapter | Partial: schema is PostgreSQL-compatible, and the code includes an optional vector/search adapter contract, but the runtime remains SQLite-first |
+| LangGraph durable orchestration | Partial: durable local checkpointing is implemented, but full LangGraph orchestration is not yet deployed |
+| Embedding retrieval/pgvector | Partial: vector contract is available; production pgvector deployment is not yet configured |
 | Demo-role authorization | Implemented for remediation approval; full authentication is not complete |
 
 This is a hackathon prototype, not legal advice, certified regulatory software, or a guarantee of compliance. Synthetic bank records and illustrative regulatory excerpts are labelled as such.
